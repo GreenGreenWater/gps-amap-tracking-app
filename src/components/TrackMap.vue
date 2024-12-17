@@ -18,7 +18,7 @@
       <button id="queryBtn" style="padding: 5px 10px;" @click="getTracesAndRender">查询</button>
     </div>
     <div id="info-container">
-      <el-table :data="stopsData" stripe :header-cell-style="{ 'background': '#c5def4' }" style="width: 100%"
+      <el-table :data="staysData" stripe :header-cell-style="{ 'background': '#c5def4' }" style="width: 100%"
         :max-height="'calc(35vh - 10px)'" :row-class-name="tableRowClassName">
         <el-table-column type="index" label="序号" width="80" />
         <el-table-column prop="vehNo" label="车辆号" width="120"></el-table-column>
@@ -44,7 +44,7 @@
 import AMapLoader from '@amap/amap-jsapi-loader';  // 导入 AMapLoader
 import { ref, onMounted, onUnmounted } from 'vue'
 import icon_of_truck from '@/assets/car.png';
-import { getGpsTrace, getKeyPointStops } from '../utils/http'; // 导入 http.js 中的函数
+import { getGpsTrace, getKeyPointStops, getShipmentStops } from '../utils/http'; // 导入 http.js 中的函数
 
 let map = ref(null);
 let poiQuery = ref(null)  // POI 搜索框的查询关键字
@@ -56,10 +56,14 @@ let placeSearch = ref(null)  // 用于存储 AMap.PlaceSearch 对象
 let infoWindow = ref(null)
 let pathSimplifierIns = ref(null)
 let currentMarker = ref(null)
-let stopsData = ref([])
+let staysData = ref([])
 let navgtr = ref(null)
 let rectangleFlagPin = ref(null)
 let triangleFlagPin = ref(null)
+let bsAllStops = ref([])
+let destFlagMarkers = ref([])
+let fivePointPin = ref(null)
+let pickupMarkers = ref([])
 
 const initAMap = async () => {
   try {
@@ -95,12 +99,19 @@ const initAMap = async () => {
     map.value.addControl(toolbar);
 
     rectangleFlagPin.value = new window.AMapUI.SvgMarker.Shape.RectangleFlagPin({
-      height: 40, //高度
+      height: 30, //高度
       //width: **, //不指定,维持默认的宽高比
       fillColor: 'orange', //填充色
       strokeWidth: 1, //描边宽度
       strokeColor: '#666' //描边颜色
       //offset:[n1, n2] //这里不设置offset，偏移本身和形状的尺寸相关，WaterDrop中实现了getOffset方法，所以不需要在构造参数中写死offset。
+    });
+
+    fivePointPin.value = new window.AMapUI.SvgMarker.Shape.FivePointsStar({
+      height: 20, //高度
+      fillColor: 'red', //填充色
+      strokeWidth: 1, //描边宽度
+      strokeColor: '#666' //描边颜色
     });
 
     triangleFlagPin.value = new window.AMapUI.SvgMarker.Shape.TriangleFlagPin({
@@ -192,9 +203,8 @@ const initAMap = async () => {
     const shipmentId = new URLSearchParams(window.location.search).get('shipmentId');
     if (shipmentId) {
       renderPathSimplifier(shipmentId);
-      fetchStaysData(shipmentId).then(() => {
-        renderDestData();
-      }); // 通过 shipmentId 加载停留数据
+      fetchAndRenderDestPoint(shipmentId);
+      fetchStaysData(shipmentId); // 通过 shipmentId 加载停留数据
     }
 
   } catch (error) {
@@ -205,42 +215,78 @@ const initAMap = async () => {
 // 获取停留数据并更新表格
 const fetchStaysData = async (shipmentId) => {
   try {
-    stopsData.value = await getKeyPointStops(shipmentId); // 调用 http.js 中的 API
+    if(currentMarker.value){
+      currentMarker.value.setMap(null);
+    }
+    staysData.value = await getKeyPointStops(shipmentId); // 调用 http.js 中的 API
   } catch (error) {
     console.error("获取停留数据失败:", error);
   }
 }
 
-const renderDestData = async () => {
-  if(stopsData.value.length > 0){
-    stopsData.value.forEach((item) => {
-      if(item.matchedSomeDeliverPoint){
-        const destPosition = new AMap.value.LngLat(parseFloat(item.destLongitude), parseFloat(item.destLatitude));
-       // 使用 SvgMarker 创建旗帜标记
-       const destMarker = new window.AMapUI.SvgMarker(rectangleFlagPin.value,{
-          position: destPosition,
-          title: item.addr,
-          label: {
-            content: `
-              <strong>目的地: ${item.destAddr}</strong><br>
-              <strong>地址编码: ${item.stopGid}</strong><br>
-              `,
-            style: {
-              color: 'white',
-              backgroundColor: '#FF5722',
-              borderRadius: '50%',
-              fontSize: '16px',
-              width: '30px',
-              height: '30px',
-              textAlign: 'center',
-              lineHeight: '30px'
-            }
-          }
-        });
-        destMarker.setMap(map.value);
-      }
+const fetchAndRenderDestPoint = async (shipmentId) => {
+  if(destFlagMarkers.value.length>0){
+    destFlagMarkers.value.forEach((elt) =>{
+      elt.setMap(null);
     })
+    destFlagMarkers.value = [];
   }
+  if(pickupMarkers.value.length>0){
+    pickupMarkers.value.forEach((elt) =>{
+      elt.setMap(null);
+    })
+    pickupMarkers.value = [];
+  }
+  getShipmentStops(shipmentId).then((data) => {
+    bsAllStops.value = data;
+    if (bsAllStops.value.length > 0) {
+      let pickupStopsCt = 0
+      bsAllStops.value.forEach((item) => {
+        if (item.stopType === 'D') {
+          const destPosition = new AMap.value.LngLat(parseFloat(item.longitude), parseFloat(item.latitude));
+          // 使用 SvgMarker 创建旗帜标记
+          const destMarker = new window.AMapUI.SvgMarker(rectangleFlagPin.value, {
+            position: destPosition,
+            title: `目的地- ${item.stopNum - pickupStopsCt}`,
+            label: {
+              content: `
+              <strong>目的地: ${item.addr}</strong><br>
+              <strong>地址编码: ${item.stopGid}</strong><br>
+              <strong>目的地顺序: ${item.stopNum - pickupStopsCt} </strong>
+              `,
+              style: {
+                color: 'white',
+                backgroundColor: '#FF5722',
+                borderRadius: '50%',
+                fontSize: '16px',
+                width: '30px',
+                height: '30px',
+                textAlign: 'center',
+                lineHeight: '30px'
+              }
+            }
+          });
+          destMarker.setMap(map.value);
+          destFlagMarkers.value.push(destMarker);
+        }else if(item.stopType==='P'){
+          pickupStopsCt ++
+          const pickupPosition = new AMap.value.LngLat(parseFloat(item.longitude), parseFloat(item.latitude));
+          const pickupMarker = new window.AMapUI.SvgMarker(fivePointPin.value, {
+            position: pickupPosition,
+            title: `装货点- ${item.stopNum}`,
+            label: {
+              content: `
+              <strong>装货点: ${item.addr}</strong><br>
+              <strong>装货点顺序: ${item.stopNum} </strong>
+              `,
+            }
+          });
+          pickupMarker.setMap(map.value);
+          pickupMarkers.value.push(pickupMarker);
+        }
+      })
+    }
+  });
 }
 
 const getTracesAndRender = () => {
@@ -251,9 +297,8 @@ const getTracesAndRender = () => {
 
   if (shipmentId) {
     renderPathSimplifier(shipmentId);// 使用输入的 shipmentId 渲染轨迹
-    fetchStaysData(shipmentId).then(() => {
-      renderDestData();
-    });
+    fetchAndRenderDestPoint(shipmentId);
+    fetchStaysData(shipmentId);
   } else {
     alert('请输入有效的 shipmentId');
   }
@@ -262,7 +307,7 @@ const getTracesAndRender = () => {
 // 显示停留点在地图上的位置
 const showOnMap = (row) => {
   const { longitude, latitude, startTime, endTime, vehNo, stayInMinutes, addr } = row;
-  const index = stopsData.value.indexOf(row);
+  const index = staysData.value.indexOf(row);
   const position = new AMap.value.LngLat(parseFloat(longitude), parseFloat(latitude));
   map.value.setCenter(position); // 设置地图中心为停留点位置
   if (currentMarker.value) {
@@ -380,76 +425,6 @@ const renderPathSimplifier = async (shipmentId) => {
     console.error('渲染轨迹失败:', error);
   }
 };
-
-//Polyline 形式渲染轨迹
-// async renderTrack(shipmentId) {
-//   try {
-//     const traceData = await getGpsTrace(shipmentId); // 获��轨迹数据
-
-//     const path = traceData.map((point) => [parseFloat(point.lng), parseFloat(point.lat)]); // 提取经纬度数据
-
-//     // 如果之前已有轨迹折线，先删除
-//     if (polyline) {
-//       polyline.setMap(null);
-//     }
-
-//     // 创建新的轨迹折线
-//     polyline = new AMap.Polyline({
-//       path: path, // 轨迹路径
-//       isOutline: true,
-//       strokeStyle: 'dashed',
-//       strokeColor: '#FF33FF', // 轨迹颜色
-//       strokeWeight: 10, // 轨迹线宽
-//       strokeOpacity: 0.3, // 轨迹透明度
-//     });
-
-//     polyline.setMap(map.value); // 将轨迹折线添加到地图上
-
-//     // 为每个轨迹点添加Marker并显示infoWindow
-//     traceData.forEach((point, index) => {
-//       const marker = new AMap.Marker({
-//         position: new AMap.LngLat(parseFloat(point.lng), parseFloat(point.lat)), // 标记位置
-//         title: `车辆号：${point.vehNo}`, // 提示信息
-//         content: `<img src="https://webapi.amap.com/theme/v1.3/markers/n/mark_b1.png" style="transform: rotate(${index < traceData.length - 1 ? this.getDirection(point, traceData[index + 1]) : 0}deg);" alt="direction" />`, // 自定义箭头图片，旋转方向
-//         // angle: point.direction, // 设置Marker旋转角度，表示行驶方向
-//         // content: `<img src="https://webapi.amap.com/theme/v1.3/markers/n/mark_b1.png" style="transform: rotate(${point.direction}deg);" alt="direction" />`, // 自定义箭头图片，旋转方向
-//       });
-
-//       // 创建 infoWindow 内容
-//       const content = `
-//     <div>
-//       <strong>车辆号：</strong> ${point.vehNo} <br>
-//       <strong>定位时间：</strong> ${this.formatDate(point.pkgTs)} <br>
-//       <strong>省：</strong> ${point.province} <br>
-//       <strong>市：</strong> ${point.city} <br>
-//       <strong>区县：</strong> ${point.district || '暂无'} <br>
-//       <strong>详细地址：</strong> ${point.addr} <br>
-//       <strong>速度：</strong> ${point.speed} km/h <br>
-//       <strong>方向：</strong> ${point.direction}° <br>
-//       <strong>总公里数：</strong> ${point.totalMiles} km
-//     </div>`;
-
-//       const infoWindow = new AMap.InfoWindow({
-//         content: content, // 设置 infoWindow 内容
-//         offset: new AMap.Pixel(0, -30), // 设置 infoWindow 显示位置偏移
-//       });
-
-//       // 点击 Marker 时弹出 infoWindow
-//       marker.on('click', () => {
-//         infoWindow.open(map.value, marker.getPosition());
-//       });
-
-//       // 将 Marker 添加到地图上
-//       marker.setMap(map.value);
-//     });
-
-//     // 设置视角范围，确保轨迹点���部展示
-//     map.value.setFitView([polyline]);
-//   } catch (error) {
-//     console.error('渲染轨迹失败:', error);
-//   }
-
-// },
 
 // 格式化时间为易读的日期时间
 const formatDate = (timestamp) => {
