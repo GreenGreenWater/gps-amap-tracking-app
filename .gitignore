@@ -13,6 +13,8 @@ dist
 dist-ssr
 coverage
 *.local
+# 自定义build输出目录 #
+target
 
 /cypress/videos/
 /cypress/screenshots/
