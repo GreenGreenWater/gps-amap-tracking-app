@@ -12,10 +12,15 @@
     </div>
     <!-- 添加右上角的指令查询输入框 -->
     <div id="control-panel"
-      style="position: absolute; top: 20px; right: 20px; z-index: 1000; background: rgba(255, 255, 255, 0.7); padding: 10px; border-radius: 5px;">
-      <input type="text" id="shipmentIdInput" placeholder="输入 调度指令号"
-        style="padding: 5px; width: 200px; margin-right: 10px;">
-      <button id="queryBtn" style="padding: 5px 10px;" @click="getTracesAndRender">查询</button>
+      style="position: absolute; top: 20px; right: 20px; z-index: 1000; background: rgba(255, 255, 255, 0.7); padding: 10px; border-radius: 5px; display: flex; flex-direction: column; gap: 10px;">
+      <div style="display: flex; align-items: center;">
+        <input type="text" id="shipmentIdInput" placeholder="输入 调度指令号"
+          style="padding: 5px; width: 200px; margin-right: 10px;">
+        <button id="queryBtn" style="padding: 5px 10px;" @click="getTracesAndRender">查询</button>
+      </div>
+      <div style="display: flex; justify-content: flex-end;">
+        <button id="replayBtn" style="padding: 5px 10px;" @click="replayTrace">轨迹重放</button>
+      </div>
     </div>
     <div id="info-container">
       <el-table :data="staysData" stripe :header-cell-style="{ 'background': '#c5def4' }" style="width: 100%"
@@ -66,13 +71,22 @@ let fivePointPin = ref(null)
 let pickupMarkers = ref([])
 
 const initAMap = async () => {
+  // 添加 HTTPS 检查和重定向逻辑
+  if (window.location.protocol !== 'https:' && window.location.hostname !== 'localhost') {
+    window.location.href = window.location.href.replace('http:', 'https:');
+    return;
+  }
+
   try {
-    window._AMapSecurityConfig = {
-      securityJsCode: "6844e28491d0f5c0745ef1c15dfc7888",
-    };
+    // window._AMapSecurityConfig = {
+    //   securityJsCode: "6844e28491d0f5c0745ef1c15dfc7888",
+    // };
     // 使用 AMapLoader 异步加载高德地图
     const AMapModule = await AMapLoader.load({
-      key: '1c35e4edce73b9414a373c04fd7bdb19',  // 在这里填写你自己的高德地图 API Key
+      key: 'f31933cb969297fb790c389395af0b0f',  // 在这里填写你自己的高德地图 API Key
+      security: {
+        securityJsCode: "c6dfd1e0b4d165d05b3ff5fbb4752038",
+      },
       version: '2.0',  // 高德地图 JS API 版本
       plugins: ['AMap.Scale', 'AMap.ToolBar', 'AMap.InfoWindow', 'AMap.MapType', 'AMap.TrafficLayer', 'AMap.AutoComplete', 'AMap.PlaceSearch'],  // 加载必要的插件
       AMapUI: {
@@ -152,7 +166,7 @@ const initAMap = async () => {
       },
       getHoverTitle: (pathData, _pathIndex, pointIndex) => {
         if (pointIndex >= 0) {
-          //point 
+          //point
           const point = pathData.path[pointIndex];
           // console.log(point)
           const content = `
@@ -202,8 +216,8 @@ const initAMap = async () => {
     // 获取 URL 参数并调用接口加载数据
     const shipmentId = new URLSearchParams(window.location.search).get('shipmentId');
     if (shipmentId) {
-      renderPathSimplifier(shipmentId);
       fetchAndRenderDestPoint(shipmentId);
+      renderPathSimplifier(shipmentId);
       fetchStaysData(shipmentId); // 通过 shipmentId 加载停留数据
     }
 
@@ -296,11 +310,21 @@ const getTracesAndRender = () => {
   console.info('target shipmentId is :', shipmentId);
 
   if (shipmentId) {
-    renderPathSimplifier(shipmentId);// 使用输入的 shipmentId 渲染轨迹
     fetchAndRenderDestPoint(shipmentId);
+    renderPathSimplifier(shipmentId);// 使用输入的 shipmentId 渲染轨迹
     fetchStaysData(shipmentId);
   } else {
     alert('请输入有效的 shipmentId');
+  }
+};
+
+// 轨迹重放
+const replayTrace = () => {
+  if (navgtr.value) {
+    navgtr.value.stop();
+    navgtr.value.start();
+  } else {
+    alert('请先查询并加载轨迹');
   }
 };
 
@@ -313,7 +337,7 @@ const showOnMap = (row) => {
   if (currentMarker.value) {
     currentMarker.value.setMap(null);
   }
-  
+
   if(row.matchedSomeDeliverPoint){
     currentMarker.value = new window.AMapUI.SvgMarker(triangleFlagPin.value,{
       position,
@@ -360,12 +384,22 @@ const renderPathSimplifier = async (shipmentId) => {
   try {
     const traceData = await getGpsTrace(shipmentId); // 获取轨迹数据
 
-    if (!traceData || traceData.length < 0) {
+    if (!traceData || traceData.length === 0) {
       console.info(`${shipmentId} 未查询到任何轨迹数据`);
+      return;
+    }
+
+    if (navgtr.value) {
+      if (navgtr.value.marker) {
+        navgtr.value.marker.setMap(null);
+      }
+      navgtr.value.destroy();
+      navgtr.value = null;
     }
 
     const pathData = [{ name: shipmentId, path: traceData }]
     // console.log('pathData: ', pathData)
+
 
     //设置轨迹数据
     pathSimplifierIns.value.setData(pathData);
@@ -406,20 +440,19 @@ const renderPathSimplifier = async (shipmentId) => {
 
     navgtr.value.marker = new AMap.value.Marker({
       offset: new AMap.value.Pixel(12, -10),
-      content: `${pathData[0].path[0].vehNo}`,
+      content: traceData && traceData.length > 0 ? `${traceData[0].vehNo}` : '',
       map: map.value
     });
 
     // 监听移动中巡航器
     navgtr.value.on("move", function () {
-      // let idx = this.getCursor().idx; // 走到了第几个点
-      // let point = pathData[0].path[idx];
-      // console.info('巡航经过点 :',point);
-      // navgtr.marker.setContent(point.addr);
-      navgtr.value.marker.setPosition(navgtr.value.getPosition());
+      if (navgtr.value && navgtr.value.marker) {
+        navgtr.value.marker.setPosition(navgtr.value.getPosition());
+      }
     });
 
-    navgtr.value.start()
+    // 只有在手动点击重放时才执行 start()，初始化时不自动开始
+    // navgtr.value.start()
 
   } catch (error) {
     console.error('渲染轨迹失败:', error);
@@ -498,8 +531,11 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
-  if(navgtr.value && typeof navgtr.value.destory != 'undefined'){
-    navgtr.value.destory()
+  if (navgtr.value) {
+    if (navgtr.value.marker) {
+      navgtr.value.marker.setMap(null);
+    }
+    navgtr.value.destroy();
   }
 })
 
@@ -575,7 +611,7 @@ li:hover {
   border-right: 1px solid #d6e4ff;
   /* 淡蓝色网格线 */
   border-bottom: 1px solid #d6e4ff;
-  /* 淡蓝色网格�� */
+  /* 淡蓝色网格线 */
   font-size: small;
   font-family: "Microsoft YaHei", "微软雅黑", "Arial", sans-serif;
   /* 设置中文等宽字体 */

@@ -55,7 +55,11 @@ export const getKeyPointStops = async (shipmentId) => {
     const response = await axiosInstance.get('trace/getStays', {
       params: { shipmentId }
     });
-    return response.data; // 由于拦截器已处理了 success ��断，这里直接返回 data
+    //将response.data 按 startTime 字段降序排列
+    if (Array.isArray(response.data)) {
+      response.data.sort((a, b) => new Date(b.startTime) - new Date(a.startTime));
+    }
+    return response.data; // 由于拦截器已处理了 success 判断，这里直接返回 data
   } catch (error) {
     console.error('获取停留数据失败:', error);
     throw error;
