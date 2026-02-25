@@ -30,6 +30,7 @@
           style="width: 200px;"
           clearable
         />
+        <button @click="addSixHours" style="padding: 5px 8px; cursor: pointer; background: #fff; border: 1px solid #ccc; border-radius: 3px; font-size: 12px; font-weight: bold; color: #409eff;">+6h</button>
       </div>
       <div style="background: rgba(255, 255, 255, 0.8); padding: 10px; border-radius: 5px; pointer-events: auto; box-shadow: 0 2px 6px rgba(0,0,0,0.1); display: flex; align-items: center; gap: 10px;">
         <div style="display: flex; gap: 5px;">
@@ -71,7 +72,11 @@
     <div id="info-container">
       <el-table :data="staysData" stripe :header-cell-style="{ 'background': '#c5def4' }" style="width: 100%"
         :max-height="'calc(35vh - 10px)'" :row-class-name="tableRowClassName">
-        <el-table-column type="index" label="序号" width="80" />
+        <el-table-column label="序号" width="80">
+          <template v-slot="scope">
+            {{ scope.row.seq }}
+          </template>
+        </el-table-column>
         <el-table-column prop="vehNo" label="车辆号" width="120"></el-table-column>
         <el-table-column label="停留开始时间" :formatter="(row) => formatDate(row.startTime)" width="180"></el-table-column>
         <el-table-column label="停留结束时间" :formatter="(row) => formatDate(row.endTime)" width="180"></el-table-column>
@@ -300,7 +305,19 @@ const fetchStaysData = async (shipmentId) => {
     if(currentMarker.value){
       currentMarker.value.setMap(null);
     }
-    staysData.value = await getKeyPointStops(shipmentId); // 调用 http.js 中的 API
+    const data = await getKeyPointStops(shipmentId); // 调用 http.js 中的 API
+    if (data && data.length > 0) {
+      // 1. 先按时间升序排列，分配一个固定的行程序号 (seq)
+      data.sort((a, b) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime());
+      data.forEach((item, idx) => {
+        item.seq = idx + 1;
+      });
+      // 2. 为了方便用户查看最新的停留记录，将数组按时间倒序排列展示
+      data.sort((a, b) => new Date(b.startTime).getTime() - new Date(a.startTime).getTime());
+      staysData.value = data;
+    } else {
+      staysData.value = [];
+    }
   } catch (error) {
     console.error("获取停留数据失败:", error);
   }
@@ -508,10 +525,22 @@ const resetAllLabels = () => {
   });
 };
 
+// 为截止时间增加 6 小时
+const addSixHours = () => {
+  // 如果当前没选时间，则以当前时间为基准，否则以已选时间为基准
+  let baseTime = inputEndTime.value ? new Date(inputEndTime.value).getTime() : Date.now();
+  if (isNaN(baseTime)) baseTime = Date.now(); // 容错处理
+
+  const newTime = baseTime + (6 * 60 * 60 * 1000); // 增加 6 小时的毫秒数
+  inputEndTime.value = formatDate(newTime);
+
+  // 紧接触发查询逻辑
+  getTracesAndRender();
+};
+
 // 显示停留点在地图上的位置
 const showOnMap = (row) => {
-  const { longitude, latitude, startTime, endTime, vehNo, stayInMinutes, addr } = row;
-  const index = staysData.value.indexOf(row);
+  const { longitude, latitude, startTime, endTime, vehNo, stayInMinutes, addr, seq } = row;
   const position = new AMap.value.LngLat(parseFloat(longitude), parseFloat(latitude));
   map.value.setCenter(position); // 设置地图中心为停留点位置
   if (currentMarker.value) {
@@ -524,7 +553,7 @@ const showOnMap = (row) => {
       title: `车辆号：${vehNo}`,
       label: {  // 使用 label 显示序号
         content: `
-          <strong>停留点序号: ${index + 1}</strong><br>
+          <strong>停留点序号: ${seq}</strong><br>
           <strong>停留时间:${stayInMinutes} 分钟</strong><br>
           <strong>自 ${new Date(startTime).toLocaleString()} 到 ${new Date(endTime).toLocaleString()}</strong><br>
           <strong>地址: ${addr}</strong>
@@ -537,7 +566,7 @@ const showOnMap = (row) => {
     title: `车辆号：${vehNo}`,
     label: {  // 使用 label 显示序号
       content: `
-          <strong>停留点序号: ${index + 1}</strong><br>
+          <strong>停留点序号: ${seq}</strong><br>
           <strong>停留时间:${stayInMinutes} 分钟</strong><br>
           <strong>自 ${new Date(startTime).toLocaleString()} 到 ${new Date(endTime).toLocaleString()}</strong><br>
           <strong>地址: ${addr}</strong>
