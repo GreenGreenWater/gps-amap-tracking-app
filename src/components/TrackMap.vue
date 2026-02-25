@@ -1,7 +1,8 @@
 <template>
-  <div style="height: 100%; overflow-y: none;">
-    <!-- 上部高德地图 -->
-    <div id="map-container" style="width: 100%;"></div>
+  <el-config-provider :locale="zhCn">
+    <div style="height: 100%; overflow-y: none;">
+      <!-- 上部高德地图 -->
+      <div id="map-container" style="width: 100%;"></div>
     <div id="poi-picker" style="position: absolute; top: 10px; left: 10px; z-index: 999;">
       <input type="text" v-model="poiQuery" placeholder="请输入要查找的地点" @input="onInput" @focus="onFocus" @blur="onBlur" />
       <ul v-if="poiSuggestions.length" style="list-style-type: none; padding: 0;">
@@ -12,14 +13,59 @@
     </div>
     <!-- 添加右上角的指令查询输入框 -->
     <div id="control-panel"
-      style="position: absolute; top: 20px; right: 20px; z-index: 1000; background: rgba(255, 255, 255, 0.7); padding: 10px; border-radius: 5px; display: flex; flex-direction: column; gap: 10px;">
-      <div style="display: flex; align-items: center;">
-        <input type="text" id="shipmentIdInput" placeholder="输入 调度指令号"
+      style="position: absolute; top: 20px; right: 20px; z-index: 1000; display: flex; flex-direction: column; align-items: flex-end; gap: 10px; pointer-events: none;">
+      <div style="display: flex; align-items: center; background: rgba(255, 255, 255, 0.8); padding: 10px; border-radius: 5px; pointer-events: auto; box-shadow: 0 2px 6px rgba(0,0,0,0.1);">
+        <input type="text" v-model="shipmentIdQuery" placeholder="输入 调度指令号"
           style="padding: 5px; width: 200px; margin-right: 10px;">
         <button id="queryBtn" style="padding: 5px 10px;" @click="getTracesAndRender">查询</button>
       </div>
-      <div style="display: flex; justify-content: flex-end;">
-        <button id="replayBtn" style="padding: 5px 10px;" @click="replayTrace">轨迹重放</button>
+      <!-- 新增：结束时间选择器 -->
+      <div style="display: flex; align-items: center; background: rgba(255, 255, 255, 0.8); padding: 10px; border-radius: 5px; pointer-events: auto; box-shadow: 0 2px 6px rgba(0,0,0,0.1); gap: 10px;">
+        <span style="font-size: 14px; color: #333; font-weight: bold;">轨迹截止时间</span>
+        <el-date-picker
+          v-model="inputEndTime"
+          type="datetime"
+          placeholder="不选则使用系统运抵时间"
+          value-format="YYYY-MM-DD HH:mm:ss"
+          style="width: 200px;"
+          clearable
+        />
+      </div>
+      <div style="background: rgba(255, 255, 255, 0.8); padding: 10px; border-radius: 5px; pointer-events: auto; box-shadow: 0 2px 6px rgba(0,0,0,0.1); display: flex; align-items: center; gap: 10px;">
+        <div style="display: flex; gap: 5px;">
+          <button v-for="m in [1, 2, 4]" :key="m" @click="setPlaybackSpeed(m)"
+            :style="{
+              padding: '2px 8px',
+              fontSize: '12px',
+              cursor: 'pointer',
+              backgroundColor: currentSpeedMultiplier === m ? '#c5def4' : '#fff',
+              border: '1px solid #ccc',
+              borderRadius: '3px'
+            }">
+            x{{ m }}
+          </button>
+        </div>
+        <!-- 暂停/继续 按钮 -->
+        <button id="pauseBtn" style="padding: 5px 8px; cursor: pointer; display: flex; align-items: center; background: #fff; border: 1px solid #ccc; border-radius: 3px;" @click="togglePause" title="暂停/继续">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+            <!-- 使用响应式变量 isMoving 来控制图标 -->
+            <template v-if="isMoving">
+              <rect x="6" y="4" width="4" height="16"></rect>
+              <rect x="14" y="4" width="4" height="16"></rect>
+            </template>
+            <path d="M8 5v14l11-7z" v-else></path>
+          </svg>
+        </button>
+        <!-- 轨迹重放按钮 (顺时针循环图标) -->
+        <button id="replayBtn" style="padding: 5px 8px; cursor: pointer; display: flex; align-items: center; background: #fff; border: 1px solid #ccc; border-radius: 3px;" @click="replayTrace" title="重新开始">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M23 4v6h-6"></path>
+            <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
+          </svg>
+        </button>
+      </div>
+      <div style="background: rgba(255, 255, 255, 0.8); padding: 10px; border-radius: 5px; pointer-events: auto; box-shadow: 0 2px 6px rgba(0,0,0,0.1);">
+        <button id="resetLabelBtn" style="padding: 5px 10px;" @click="resetAllLabels">隐藏全部装卸货点地址</button>
       </div>
     </div>
     <div id="info-container">
@@ -40,9 +86,10 @@
           </template>
         </el-table-column>
       </el-table>
-    </div>
+      </div>
 
-  </div>
+    </div>
+  </el-config-provider>
 </template>
 
 <script setup>
@@ -50,6 +97,7 @@ import AMapLoader from '@amap/amap-jsapi-loader';  // 导入 AMapLoader
 import { ref, onMounted, onUnmounted } from 'vue'
 import icon_of_truck from '@/assets/car.png';
 import { getGpsTrace, getKeyPointStops, getShipmentStops } from '../utils/http'; // 导入 http.js 中的函数
+import zhCn from 'element-plus/es/locale/lang/zh-cn'; // 导入中文语言包
 
 let map = ref(null);
 let poiQuery = ref(null)  // POI 搜索框的查询关键字
@@ -63,6 +111,13 @@ let pathSimplifierIns = ref(null)
 let currentMarker = ref(null)
 let staysData = ref([])
 let navgtr = ref(null)
+const BASE_SPEED = 300000 // 基准重放速度
+let currentSpeedMultiplier = ref(1) // 当前倍率
+let isPlaybackFinished = ref(false) // 是否播放完毕
+let isMoving = ref(false) // 是否正在移动（响应式状态）
+let shipmentIdQuery = ref('') // 指令号输入框绑定的变量
+let endTimeParam = ref(null) // 页面级全局变量：轨迹截取结束时间
+let inputEndTime = ref(null) // 手动输入的结束时间
 let rectangleFlagPin = ref(null)
 let triangleFlagPin = ref(null)
 let bsAllStops = ref([])
@@ -214,10 +269,23 @@ const initAMap = async () => {
     });
 
     // 获取 URL 参数并调用接口加载数据
-    const shipmentId = new URLSearchParams(window.location.search).get('shipmentId');
+    const urlParams = new URLSearchParams(window.location.search);
+    const shipmentId = urlParams.get('shipmentId');
+    endTimeParam.value = urlParams.get('endTime');
+
+    // 初始化赋值给输入框和时间控件
+    if (shipmentId) {
+      shipmentIdQuery.value = shipmentId;
+    }
+    if (endTimeParam.value) {
+      inputEndTime.value = endTimeParam.value;
+    }
+
     if (shipmentId) {
       fetchAndRenderDestPoint(shipmentId);
-      renderPathSimplifier(shipmentId);
+      // 初始加载也遵循优先级：inputEndTime > endTimeParam
+      const targetEndTime = inputEndTime.value || endTimeParam.value;
+      renderPathSimplifier(shipmentId, targetEndTime);
       fetchStaysData(shipmentId); // 通过 shipmentId 加载停留数据
     }
 
@@ -262,39 +330,96 @@ const fetchAndRenderDestPoint = async (shipmentId) => {
           const destMarker = new window.AMapUI.SvgMarker(rectangleFlagPin.value, {
             position: destPosition,
             title: `目的地- ${item.stopNum - pickupStopsCt}`,
+            zIndex: 100,
+            // 存入数据以便后续遍历更新
+            extData: {
+              addr: item.addr,
+              stopGid: item.stopGid,
+              order: item.stopNum - pickupStopsCt
+            },
             label: {
-              content: `
-              <strong>目的地: ${item.addr}</strong><br>
-              <strong>地址编码: ${item.stopGid}</strong><br>
-              <strong>目的地顺序: ${item.stopNum - pickupStopsCt} </strong>
-              `,
-              style: {
-                color: 'white',
-                backgroundColor: '#FF5722',
-                borderRadius: '50%',
-                fontSize: '16px',
-                width: '30px',
-                height: '30px',
-                textAlign: 'center',
-                lineHeight: '30px'
-              }
+              content: `<div class="custom-dest-label" style="pointer-events: none; color: white; background: rgba(25, 87, 34, 0.1); border-radius: 5px; font-size: 12px; padding: 10px; border: 1px solid white; white-space: nowrap;">
+                  <strong>目的地: ${item.addr}</strong><br>
+                  <strong>地址编码: ${item.stopGid}</strong><br>
+                  <strong>目的地顺序: ${item.stopNum - pickupStopsCt} </strong>
+                </div>`,
+              offset: new AMap.value.Pixel(10, -10)
             }
           });
+
+          // 点击逻辑：点击置顶并设为 0.8 透明度，其它自动变回 0.1
+          destMarker.on('click', (evt) => {
+            // 1. 重置所有标记的透明度和层级
+            destFlagMarkers.value.forEach(m => {
+              const data = m.getExtData();
+              m.setLabel({
+                content: `<div class="custom-dest-label" style="pointer-events: none; color: white; background: rgba(25, 87, 34, 0.1); border-radius: 5px; font-size: 12px; padding: 10px; border: 1px solid white; white-space: nowrap;">
+                    <strong>目的地: ${data.addr}</strong><br>
+                    <strong>地址编码: ${data.stopGid}</strong><br>
+                    <strong>目的地顺序: ${data.order} </strong>
+                  </div>`,
+                offset: new AMap.value.Pixel(10, -10)
+              });
+            });
+
+            // 2. 将当前点击的置顶并设为高亮 (0.8)
+            evt.target.setTop(true);
+            evt.target.setLabel({
+              content: `<div class="custom-dest-label" style="pointer-events: none; color: white; background: rgba(255, 87, 34, 0.8); border-radius: 5px; font-size: 12px; padding: 10px; border: 1px solid white; white-space: nowrap;">
+                  <strong>目的地: ${item.addr}</strong><br>
+                  <strong>地址编码: ${item.stopGid}</strong><br>
+                  <strong>目的地顺序: ${item.stopNum - pickupStopsCt} </strong>
+                </div>`,
+              offset: new AMap.value.Pixel(10, -10)
+            });
+          });
+
           destMarker.setMap(map.value);
           destFlagMarkers.value.push(destMarker);
+
         }else if(item.stopType==='P'){
           pickupStopsCt ++
           const pickupPosition = new AMap.value.LngLat(parseFloat(item.longitude), parseFloat(item.latitude));
           const pickupMarker = new window.AMapUI.SvgMarker(fivePointPin.value, {
             position: pickupPosition,
             title: `装货点- ${item.stopNum}`,
+            zIndex: 100,
+            extData: {
+              addr: item.addr,
+              order: item.stopNum
+            },
             label: {
-              content: `
-              <strong>装货点: ${item.addr}</strong><br>
-              <strong>装货点顺序: ${item.stopNum} </strong>
-              `,
+              content: `<div class="custom-pickup-label" style="pointer-events: none; color: white; background: rgba(76, 175, 80, 0.1); border-radius: 5px; font-size: 12px; padding: 10px; border: 1px solid white; white-space: nowrap;">
+                  <strong>装货点: ${item.addr}</strong><br>
+                  <strong>装货点顺序: ${item.stopNum} </strong>
+                </div>`,
+              offset: new AMap.value.Pixel(10, -10)
             }
           });
+
+          // 点击逻辑：点击置顶并高亮绿标，其它变淡
+          pickupMarker.on('click', (evt) => {
+            pickupMarkers.value.forEach(m => {
+              const data = m.getExtData();
+              m.setLabel({
+                content: `<div class="custom-pickup-label" style="pointer-events: none; color: white; background: rgba(76, 175, 80, 0.1); border-radius: 5px; font-size: 12px; padding: 10px; border: 1px solid white; white-space: nowrap;">
+                    <strong>装货点: ${data.addr}</strong><br>
+                    <strong>装货点顺序: ${data.order} </strong>
+                  </div>`,
+                offset: new AMap.value.Pixel(10, -10)
+              });
+            });
+
+            evt.target.setTop(true);
+            evt.target.setLabel({
+              content: `<div class="custom-pickup-label" style="pointer-events: none; color: white; background: rgba(76, 175, 80, 0.8); border-radius: 5px; font-size: 12px; padding: 10px; border: 1px solid white; white-space: nowrap;">
+                  <strong>装货点: ${item.addr}</strong><br>
+                  <strong>装货点顺序: ${item.stopNum} </strong>
+                </div>`,
+              offset: new AMap.value.Pixel(10, -10)
+            });
+          });
+
           pickupMarker.setMap(map.value);
           pickupMarkers.value.push(pickupMarker);
         }
@@ -304,28 +429,83 @@ const fetchAndRenderDestPoint = async (shipmentId) => {
 }
 
 const getTracesAndRender = () => {
-  const shipmentIdInput = document.getElementById('shipmentIdInput');
-  const shipmentId = shipmentIdInput.value.trim();
+  const shipmentId = shipmentIdQuery.value.trim();
 
   console.info('target shipmentId is :', shipmentId);
 
   if (shipmentId) {
     fetchAndRenderDestPoint(shipmentId);
-    renderPathSimplifier(shipmentId);// 使用输入的 shipmentId 渲染轨迹
+    // 优先使用手动选择的时间，否则使用 URL 传入的时间
+    const targetEndTime = inputEndTime.value || endTimeParam.value;
+    renderPathSimplifier(shipmentId, targetEndTime);
     fetchStaysData(shipmentId);
   } else {
     alert('请输入有效的 shipmentId');
   }
 };
 
-// 轨迹重放
+// 轨迹重放 (始终强制从头开始)
 const replayTrace = () => {
   if (navgtr.value) {
-    navgtr.value.stop();
-    navgtr.value.start();
+    navgtr.value.stop(); // 强行重置状态，会触发 stop 事件
+    navgtr.value.start(); // 从头开始，会触发 start 事件
   } else {
     alert('请先查询并加载轨迹');
   }
+};
+
+// 切换暂停/继续状态
+const togglePause = () => {
+  if (navgtr.value) {
+    const status = navgtr.value.getNaviStatus();
+    if (status === 'moving') {
+      navgtr.value.pause(); // 触发 pause 事件
+    } else if (status === 'pause') {
+      navgtr.value.resume(); // 触发 resume 事件
+    } else {
+      // 如果是停止状态或播放完毕状态
+      navgtr.value.start(); // 触发 start 事件
+    }
+  }
+};
+
+// 设置重放倍速
+const setPlaybackSpeed = (multiplier) => {
+  currentSpeedMultiplier.value = multiplier;
+  if (navgtr.value) {
+    // 1. 动态调整当前巡航器的速度
+    navgtr.value.setSpeed(BASE_SPEED * multiplier);
+    // 2. 联动触发重放逻辑
+    replayTrace();
+  }
+};
+
+// 重置所有便签透明度为 0.1
+const resetAllLabels = () => {
+  // 1. 重置目的地标记
+  destFlagMarkers.value.forEach(m => {
+    const data = m.getExtData();
+    m.setLabel({
+      content: `<div class="custom-dest-label" style="pointer-events: none; color: white; background: rgba(25, 87, 34, 0.1); border-radius: 5px; font-size: 12px; padding: 10px; border: 1px solid white; white-space: nowrap;">
+          <strong>目的地: ${data.addr}</strong><br>
+          <strong>地址编码: ${data.stopGid}</strong><br>
+          <strong>目的地顺序: ${data.order} </strong>
+        </div>`,
+      offset: new AMap.value.Pixel(10, -10)
+    });
+  });
+
+  // 2. 重置装货点标记
+  pickupMarkers.value.forEach(m => {
+    const data = m.getExtData();
+    m.setLabel({
+      content: `<div class="custom-pickup-label" style="pointer-events: none; color: white; background: rgba(76, 175, 80, 0.1); border-radius: 5px; font-size: 12px; padding: 10px; border: 1px solid white; white-space: nowrap;">
+          <strong>装货点: ${data.addr}</strong><br>
+          <strong>装货点顺序: ${data.order} </strong>
+        </div>`,
+      offset: new AMap.value.Pixel(10, -10)
+    });
+  });
 };
 
 // 显示停留点在地图上的位置
@@ -380,12 +560,28 @@ const showOnMap = (row) => {
 }
 
 // PathSimplifier 方式 渲染轨迹
-const renderPathSimplifier = async (shipmentId) => {
+const renderPathSimplifier = async (shipmentId, endTimeStr) => {
   try {
-    const traceData = await getGpsTrace(shipmentId); // 获取轨迹数据
+    let traceData = await getGpsTrace(shipmentId); // 获取轨迹数据
 
     if (!traceData || traceData.length === 0) {
       console.info(`${shipmentId} 未查询到任何轨迹数据`);
+      return;
+    }
+
+    // 如果传入了结束时间，则按 pkgTs 字段截取数据
+    if (endTimeStr) {
+      const endTimeTs = new Date(endTimeStr).getTime();
+      if (!isNaN(endTimeTs)) {
+        console.info(`按结束时间 ${endTimeStr} 截取轨迹数据...`);
+        traceData = traceData.filter(point => point.pkgTs <= endTimeTs);
+      } else {
+        console.warn(`传入的结束时间格式无效: ${endTimeStr}`);
+      }
+    }
+
+    if (traceData.length === 0) {
+      console.info(`${shipmentId} 在指定时间范围内未查询到轨迹数据`);
       return;
     }
 
@@ -419,7 +615,7 @@ const renderPathSimplifier = async (shipmentId) => {
 
     navgtr.value = pathSimplifierIns.value.createPathNavigator(0, {
       loop: false, // 循环播放
-      speed: 300000, // 巡航速度，单位千米/小时
+      speed: BASE_SPEED * currentSpeedMultiplier.value, // 应用当前倍速
       pathNavigatorStyle: {
         // width: 18, //不设置，使用默认的宽高比
         height: 24,
@@ -449,6 +645,22 @@ const renderPathSimplifier = async (shipmentId) => {
       if (navgtr.value && navgtr.value.marker) {
         navgtr.value.marker.setPosition(navgtr.value.getPosition());
       }
+    });
+
+    // --- 全局状态事件监听 ---
+    navgtr.value.on("start resume", function () {
+      isMoving.value = true;
+      isPlaybackFinished.value = false;
+    });
+
+    navgtr.value.on("pause", function () {
+      isMoving.value = false;
+    });
+
+    navgtr.value.on("stop", function () {
+      isMoving.value = false;
+      isPlaybackFinished.value = true;
+      console.log('轨迹播放完毕/停止');
     });
 
     // 只有在手动点击重放时才执行 start()，初始化时不自动开始
@@ -543,6 +755,13 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
+/* 强制覆盖高德地图 label 的默认灰色边框和背景 */
+:deep(.amap-marker-label) {
+  border: none !important;
+  background-color: transparent !important;
+  padding: 0 !important;
+}
+
 #map-container {
   height: 60vh;
   /* 上部高德地图占 60% */
